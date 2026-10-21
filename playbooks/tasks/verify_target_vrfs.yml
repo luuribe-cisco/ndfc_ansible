@@ -1,0 +1,21 @@
+- name: Query final target state
+  cisco.dcnm.dcnm_rest:
+    method: GET
+    path: "/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/top-down/fabrics/{{ msd_name }}/vrfs"
+  register: msd_vrfs_after
+
+- name: Confirm all non-default source VRFs exist on the MSD parent
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          (
+            legacy_vrfs.response.DATA
+            | rejectattr('vrfName', 'equalto', 'default')
+            | map(attribute='vrfName')
+            | list
+          )
+          | difference(msd_vrfs_after.response.DATA | map(attribute='vrfName') | list)
+          | length
+        ) == 0
+    fail_msg: "One or more non-default source VRFs are missing from the MSD parent."
