@@ -1,0 +1,82 @@
+- name: Get the next available target L3VNI
+  cisco.dcnm.dcnm_rest:
+    method: GET
+    path: "/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/top-down/fabrics/{{ msd_name }}/vrfinfo"
+  register: target_vrf_info
+
+- name: Validate the target L3VNI allocation response
+  ansible.builtin.assert:
+    that:
+      - target_vrf_info.response.DATA.l3vni is defined
+      - target_vrf_info.response.DATA.l3vni | int > 0
+    fail_msg: "NDFC did not return a usable L3VNI for {{ source_vrf.vrfName }}."
+
+- name: Parse the source VRF template configuration
+  ansible.builtin.set_fact:
+    source_vrf_template: "{{ source_vrf.vrfTemplateConfig | from_json }}"
+
+- name: Build the JSON payload for the unattached VRF
+  ansible.builtin.set_fact:
+    vrf_create_payload:
+      - fabric: "{{ msd_name }}"
+        vrfName: "{{ source_vrf.vrfName }}"
+        vrfTemplate: Default_VRF_Universal
+        vrfExtensionTemplate: Default_VRF_Extension_Universal
+        vrfId: "{{ target_vrf_info.response.DATA.l3vni | int }}"
+        serviceVrfTemplate: null
+        source: null
+        vrfTemplateConfig: >-
+          {{
+            {
+              'vrfSegmentId': target_vrf_info.response.DATA.l3vni | int,
+              'vrfName': source_vrf.vrfName,
+              'vrfVlanId': '',
+              'vrfVlanName': '',
+              'vrfIntfDescription': '',
+              'vrfDescription': source_vrf_template.vrfDescription | default(''),
+              'mtu': 9216,
+              'tag': 12345,
+              'vrfRouteMap': 'FABRIC-RMAP-REDIST-SUBNET',
+              'v6VrfRouteMap': 'FABRIC-RMAP-REDIST-SUBNET',
+              'maxBgpPaths': 1,
+              'maxIbgpPaths': 2,
+              'ipv6LinkLocalFlag': true,
+              'enableL3VniNoVlan': false,
+              'trmEnabled': false,
+              'isRPExternal': false,
+              'rpAddress': '',
+              'loopbackNumber': '',
+              'L3VniMcastGroup': '',
+              'multicastGroup': '',
+              'trmBGWMSiteEnabled': false,
+              'advertiseHostRouteFlag': false,
+              'advertiseDefaultRouteFlag': true,
+              'configureStaticDefaultRouteFlag': false,
+              'bgpPassword': '',
+              'bgpPasswordKeyType': 3,
+              'isRPAbsent': false,
+              'ENABLE_NETFLOW': false,
+              'NETFLOW_MONITOR': '',
+              'disableRtAuto': false,
+              'routeTargetImport': '',
+              'routeTargetExport': '',
+              'routeTargetImportEvpn': '',
+              'routeTargetExportEvpn': '',
+              'routeTargetImportMvpn': '',
+              'routeTargetExportMvpn': ''
+            } | to_json
+          }}
+
+- name: Create VRF {{ source_vrf.vrfName }} on the MSD parent
+  cisco.dcnm.dcnm_rest:
+    method: POST
+    path: "/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/top-down/bulk-create/vrfs"
+    data: "{{ vrf_create_payload | to_json }}"
+  register: vrf_create_result
+
+- name: Confirm VRF {{ source_vrf.vrfName }} was accepted by NDFC
+  ansible.builtin.assert:
+    that:
+      - vrf_create_result.response.RETURN_CODE | int >= 200
+      - vrf_create_result.response.RETURN_CODE | int < 300
+    fail_msg: "NDFC did not confirm creation of {{ source_vrf.vrfName }}."
