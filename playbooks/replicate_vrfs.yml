@@ -1,0 +1,49 @@
+---
+- name: Replicate source VRFs to the Multisite parent without attachments
+  hosts: ndfc_host
+  gather_facts: false
+  vars:
+    legacy_site_name: LEGACY_DC
+    msd_name: MULTI-SITE-DOMAIN
+
+  tasks:
+    - name: Get NDFC Legacy VRFs
+      cisco.dcnm.dcnm_rest:
+        method: GET
+        path: "/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/top-down/fabrics/{{ legacy_site_name }}/vrf"
+      register: legacy_vrfs
+
+    - name: Load current target state
+      ansible.builtin.include_tasks: tasks/read_target_vrfs.yml
+
+    - name: Validate the VRF list responses
+      ansible.builtin.assert:
+        that:
+          - legacy_vrfs.response.DATA is sequence
+          - legacy_vrfs.response.DATA is not string
+        fail_msg: "NDFC did not return the expected VRF list data."
+
+    - name: Select source VRFs missing from the MSD parent
+      ansible.builtin.set_fact:
+        vrfs_to_create: >-
+          {{
+            legacy_vrfs.response.DATA
+            | rejectattr('vrfName', 'equalto', 'default')
+            | rejectattr('vrfName', 'in', msd_vrfs.response.DATA | map(attribute='vrfName') | list)
+            | list
+          }}
+
+    - name: Show VRF names selected for creation
+      ansible.builtin.debug:
+        msg: "{{ vrfs_to_create | map(attribute='vrfName') | list }}"
+
+    - name: Create missing VRFs on the MSD parent without switch attachments
+      ansible.builtin.include_tasks: create_vrf_on_msd.yml
+      loop: "{{ vrfs_to_create }}"
+      loop_control:
+        loop_var: source_vrf
+        label: "{{ source_vrf.vrfName }}"
+
+    - name: Refresh target state after creation
+      ansible.builtin.include_tasks: tasks/verify_target_vrfs.yml
+      when: vrfs_to_create | length > 0
