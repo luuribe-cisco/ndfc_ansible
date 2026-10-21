@@ -1,0 +1,12 @@
+- name: Query current target state
+  cisco.dcnm.dcnm_rest:
+    method: GET
+    path: "/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/top-down/fabrics/{{ msd_name }}/vrfs"
+  register: msd_vrfs
+
+- name: Validate current target state
+  ansible.builtin.assert:
+    that:
+      - msd_vrfs.response.DATA is sequence
+      - msd_vrfs.response.DATA is not string
+    fail_msg: "NDFC did not return the expected target state."
